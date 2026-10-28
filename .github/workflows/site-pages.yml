@@ -3,7 +3,8 @@
 #   pages: 404.html and /.well-known in a real Chrome, behind a stub of GitHub
 #          Pages: a right Doll ID shows only the Doll view, anything else
 #          "Page not found"; no request, nothing stored, the CSP hash is
-#          right; both association files grant nothing.
+#          right; both association files grant nothing; /r/market-return/ (the
+#          Stripe return page) shows the same two lines whatever the query says.
 name: Site pages
 
 on:
@@ -11,6 +12,7 @@ on:
     paths:
       - '404.html'
       - '.well-known/**'
+      - 'r/market-return/**'
       - '.nojekyll'
       - '.gitattributes'
       - 'scripts/test-site-pages.mjs'
