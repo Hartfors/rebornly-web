@@ -20,7 +20,11 @@
 //   - the page's Content-Security-Policy names the sha256 of its one inline
 //     script, and Chrome runs it under that policy with no violation;
 //   - /.well-known/assetlinks.json and /.well-known/apple-app-site-association
-//     are served and grant nothing: [] and {"applinks":{"details":[]}}.
+//     are served and grant nothing: [] and {"applinks":{"details":[]}};
+//   - /r/market-return/, where the Supabase function market-return sends the
+//     browser after a Stripe Checkout or onboarding, is a script-free page
+//     that is kept out of search engines and shows the same two lines
+//     whatever the address's query carries.
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
@@ -87,6 +91,20 @@ check('every address in the page is absolute on this site (it is served at every
   urls.length > 0 && urls.every((u) => u.startsWith('/') && !u.startsWith('//')), urls);
 check('the page does not link the invitation-only forum', !/\/forum/.test(html));
 check('.nojekyll is there, so GitHub Pages publishes /.well-known', existsSync(join(ROOT, '.nojekyll')));
+// The Stripe return page. With no script nothing can read the address, a
+// cookie or a storage key, and the CSP keeps it that way.
+const returnHtml = readFileSync(join(ROOT, 'r/market-return/index.html'), 'utf8');
+const RETURN_LINES = ['Return to Rebornly', 'You can close this page.'];
+check('r/market-return has no script, refresh, form, link or frame',
+  !/<(script|form|a|iframe|object|embed)\b/i.test(returnHtml) && !/http-equiv="refresh"/i.test(returnHtml));
+check('r/market-return is kept out of search engines', returnHtml.includes('<meta name="robots" content="noindex">'));
+check('r/market-return allows no script and no connection',
+  returnHtml.includes(`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">`));
+check('r/market-return takes the brown palette: ground #F6EFE6, text #2B211B',
+  /--ground:#F6EFE6;/.test(returnHtml) && /--ink:#2B211B;/.test(returnHtml));
+const returnUrls = [...returnHtml.matchAll(/\b(?:src|href)="([^"]*)"/g)].map((m) => m[1]);
+check('every address in r/market-return is absolute on this site (it is served at every depth)',
+  returnUrls.length > 0 && returnUrls.every((u) => u.startsWith('/') && !u.startsWith('//')), returnUrls);
 for (const [file, exact] of [['.well-known/assetlinks.json', ASSETLINKS], ['.well-known/apple-app-site-association', AASA]]) {
   let raw = null;
   try { raw = readFileSync(join(ROOT, file), 'utf8'); } catch { /* missing: the check below fails */ }
@@ -226,9 +244,9 @@ async function visit(path, { javascript = true } = {}) {
     title: document.title,
     main: document.querySelector('main')?.innerText ?? '',
     body: document.body.innerText,
-    notFoundShown: !document.getElementById('notFound').hidden,
-    dollShown: !document.getElementById('doll').hidden,
-    dollId: document.getElementById('dollId').textContent,
+    notFoundShown: !!document.getElementById('notFound') && !document.getElementById('notFound').hidden,
+    dollShown: !!document.getElementById('doll') && !document.getElementById('doll').hidden,
+    dollId: document.getElementById('dollId')?.textContent ?? '',
     violations: window.__violations || [],
     keys: Object.keys(localStorage).concat(Object.keys(sessionStorage)),
     cookie: document.cookie,
@@ -341,7 +359,25 @@ try {
     && same(lines(noScript.main), NOT_FOUND) && noScript.dollId === '' && noScript.title === 'Page not found — Rebornly',
     brief(noScript));
 
-  // 4. The association files are served, as they are, from the dot-folder.
+  // 4. The Stripe return page: the same two lines for the plain address and
+  //    for addresses with a query, with and without JavaScript, answered 200,
+  //    nothing requested but its own images and nothing stored. The ids in the
+  //    queries are made up; the page must show none of them.
+  const returnQueries = ['', '?session_id=cs_test_a1B2c3', '?account=acct_1Abc&order=123e4567&x=%3Cscript%3E', '?canceled=1'];
+  for (const query of returnQueries) {
+    for (const javascript of [true, false]) {
+      const path = '/r/market-return/' + query;
+      const v = await visit(path, { javascript });
+      const label = `${path}${javascript ? '' : ' without JavaScript'}`;
+      check(`${label} shows only "Return to Rebornly" and "You can close this page."`, v.loaded && v.status === 200
+        && same(lines(v.main), RETURN_LINES) && v.title === 'Rebornly' && !v.notFoundShown && !v.dollShown, brief(v));
+      check(`${label} echoes nothing from the address`, !/cs_test|acct_|123e4567|script|canceled/i.test(v.body), v.body);
+      check(`${label} runs with no violation, no request beyond its own images, nothing stored`,
+        v.violations.length === 0 && onlyOwnImages(v) && nothingStored(v), brief(v));
+    }
+  }
+
+  // 5. The association files are served, as they are, from the dot-folder.
   for (const [path, exact, type] of [['/.well-known/assetlinks.json', ASSETLINKS, 'application/json'],
     ['/.well-known/apple-app-site-association', AASA, 'application/octet-stream']]) {
     const response = await fetch(origin + path, { redirect: 'manual' });
